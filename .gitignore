@@ -1,6 +1,22 @@
+# Dependencias
 node_modules/
 backend/node_modules/
 frontend/node_modules/
+
+# Build
 frontend/dist/
+
+# Base de datos local
 backend/src/db/database.sqlite
-enlace-mental.zip
+
+# Variables de entorno
+.env
+backend/.env
+frontend/.env
+
+# Temporales
+extract.html
+*.zip
+*.log
+.DS_Store
+Thumbs.db

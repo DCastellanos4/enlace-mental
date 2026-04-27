@@ -1,12 +1,14 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
-import { Users, UserPlus, ArrowLeft, Play, Send, RefreshCw, Trophy, LogIn, CheckCircle2, UserX, UserCircle } from 'lucide-react';
+import { Users, UserPlus, ArrowLeft, Play, Send, RefreshCw, Trophy, LogIn, CheckCircle2, UserX, UserCircle, Sun, Moon, Clipboard, Clock, Flame } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import confetti from 'canvas-confetti';
 import { initAudio, playPop, playTick, playWin } from './utils/sfx';
 import { Logo } from './components/Logo';
+import logoApp from './assets/logoApp.png';
 
-const socket = io('http://localhost:3001');
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
+const socket = io(BACKEND_URL);
 
 const PageTransition = ({ children, className }) => (
   <motion.div 
@@ -37,19 +39,61 @@ function App() {
   const [myWordInput, setMyWordInput] = useState('');
   const [winningWord, setWinningWord] = useState('');
   const [countdown, setCountdown] = useState(3);
+  const [loading, setLoading] = useState(true);
+  const [writeTimeLeft, setWriteTimeLeft] = useState(30);
+  const [currentRound, setCurrentRound] = useState(1);
+  const [closeMatch, setCloseMatch] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [totalRounds, setTotalRounds] = useState(1);
+  
+  const [isDarkMode, setIsDarkMode] = useState(() => {
+    return localStorage.getItem('em_theme') === 'dark';
+  });
 
   useEffect(() => {
+    if (isDarkMode) {
+      document.documentElement.classList.add('dark');
+      localStorage.setItem('em_theme', 'dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+      localStorage.setItem('em_theme', 'light');
+    }
+  }, [isDarkMode]);
+
+  // Hook principal de ciclo de vida para sincronizar los eventos del socket
+  useEffect(() => {
+    // 1. Persistencia de sesión: Evita que el usuario tenga que hacer login de nuevo si pulsa F5
+    const savedToken = localStorage.getItem('em_token');
+    const savedUser = localStorage.getItem('em_user');
+    
+    if (savedToken && savedUser) {
+      setToken(savedToken);
+      setCurrentUser(JSON.parse(savedUser));
+      setGameState('lobby'); // Saltamos el auth si ya tenemos token
+    }
+    setLoading(false);
+    
+    // 2. Suscripción a eventos del servidor
     socket.on('roomUpdated', (updatedPlayers) => setPlayers(updatedPlayers));
 
-    socket.on('gameStarted', (updatedPlayers) => {
+    socket.on('gameStarted', (data) => {
+      const updatedPlayers = data.players || data;
       setPlayers(updatedPlayers);
       setGameState('writing');
       setMyWordInput('');
+      setCurrentRound(data.round || 1);
+      setCloseMatch(false);
     });
 
-    socket.on('gameStateUpdated', ({ players, phase }) => {
+    socket.on('gameStateUpdated', ({ players, phase, round, closeMatch: cm }) => {
       setPlayers(players);
       setGameState(phase);
+      if (round) setCurrentRound(round);
+      if (cm !== undefined) setCloseMatch(cm);
+    });
+
+    socket.on('writeTimer', (timeLeft) => {
+      setWriteTimeLeft(timeLeft);
     });
 
     socket.on('countdownTimer', (count) => {
@@ -57,22 +101,29 @@ function App() {
       if(count > 0) playTick();
     });
 
-    socket.on('gameWon', ({ winningWord, players }) => {
+    socket.on('gameWon', ({ winningWord, players, rounds }) => {
       setPlayers(players);
       setWinningWord(winningWord);
+      setTotalRounds(rounds || 1);
       setGameState('finished');
       playWin();
-      confetti({ 
-        particleCount: 200, 
+      // Lanzamos confetti varias veces para asegurar que el efecto es espectacular
+      const fire = () => confetti({ 
+        particleCount: 150, 
         spread: 100, 
         origin: { y: 0.6 },
         colors: ['#8B5CF6', '#EC4899', '#FBBF24', '#10B981']
       });
+      fire();
+      setTimeout(fire, 300);
+      setTimeout(fire, 700);
     });
 
     socket.on('gameReset', () => {
       setGameState('waiting');
       setWinningWord('');
+      setCurrentRound(1);
+      setCloseMatch(false);
     });
 
     socket.on('kicked', () => {
@@ -82,10 +133,12 @@ function App() {
       setError('Has sido expulsado de la sala.');
     });
 
+    // IMPORTANTE: Cleanup function del useEffect para evitar fugas de memoria y duplicidad de listeners si el componente se desmonta
     return () => {
       socket.off('roomUpdated');
       socket.off('gameStarted');
       socket.off('gameStateUpdated');
+      socket.off('writeTimer');
       socket.off('countdownTimer');
       socket.off('gameWon');
       socket.off('gameReset');
@@ -100,7 +153,7 @@ function App() {
     if (type !== 'guest' && !authPassword.trim()) return setError('Falta la contraseña');
     
     try {
-      const res = await fetch(`http://localhost:3001/api/auth/${type}`, {
+      const res = await fetch(`${BACKEND_URL}/api/auth/${type}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
@@ -113,6 +166,11 @@ function App() {
       
       setToken(data.token);
       setCurrentUser(data.user);
+      
+      // Persistir sesión
+      localStorage.setItem('em_token', data.token);
+      localStorage.setItem('em_user', JSON.stringify(data.user));
+
       setGameState('lobby');
       setError('');
     } catch (err) {
@@ -147,6 +205,14 @@ function App() {
         setError(response.message);
       }
     });
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('em_token');
+    localStorage.removeItem('em_user');
+    setToken(null);
+    setCurrentUser(null);
+    setGameState('auth');
   };
 
   const handleLeaveRoom = () => {
@@ -185,23 +251,77 @@ function App() {
     socket.emit('resetGame', { roomCode: currentRoom });
   };
 
+  const handleCopyCode = () => {
+    if (!currentRoom) return;
+    navigator.clipboard.writeText(currentRoom).then(() => {
+      setCopied(true);
+      playPop();
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
+
   const amIHost = players.find(p => p.id === socket.id)?.isHost || false;
 
   const btnClass = "font-black py-4 rounded-2xl border-4 border-brand-dark shadow-brutal hover:shadow-brutal-sm hover:translate-y-[2px] transition-all flex justify-center items-center gap-2 active:shadow-none active:translate-y-[6px]";
   const inputClass = "w-full px-5 py-4 bg-white border-4 border-brand-dark rounded-2xl shadow-brutal-sm focus:outline-none focus:translate-y-[2px] focus:shadow-brutal-hover transition-all font-bold text-brand-dark placeholder-gray-400";
 
+  const toggleDarkMode = () => setIsDarkMode(prev => !prev);
+  const rawBgColorClass = "bg-brand-bg";
+
+  if (loading) {
+    return (
+      <div className={`min-h-screen flex flex-col items-center justify-center ${rawBgColorClass}`}>
+        <RefreshCw className="animate-spin text-brand-primary mb-4" size={48} />
+        <p className="font-black text-brand-dark animate-pulse">Sincronizando mente...</p>
+      </div>
+    );
+  }
+
+  const ThemeToggle = () => (
+    <motion.button 
+      initial={{ scale: 0 }}
+      animate={{ scale: 1 }}
+      whileHover={{ scale: 1.1, rotate: 15 }}
+      whileTap={{ scale: 0.9 }}
+      onClick={toggleDarkMode}
+      className="fixed top-4 right-4 z-50 p-3 bg-white border-4 border-brand-dark rounded-full shadow-brutal-sm text-brand-dark"
+    >
+      {isDarkMode ? <Sun size={24} strokeWidth={3} /> : <Moon size={24} strokeWidth={3} />}
+    </motion.button>
+  );
+
   // --- VISTA 0: Auth ---
   if (gameState === 'auth') {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center p-4">
+      <div className={`min-h-screen flex flex-col items-center justify-center p-4 relative ${rawBgColorClass}`}>
+        <ThemeToggle />
         <PageTransition className="w-full max-w-md">
           <Logo />
           
           <div className="bg-white p-8 rounded-3xl border-4 border-brand-dark shadow-brutal">
-            <div className="flex gap-2 mb-6">
-              <button onClick={() => {setAuthTab('login'); setError('')}} className={`flex-1 py-3 rounded-xl border-4 border-brand-dark font-black transition-all ${authTab==='login' ? 'bg-brand-primary text-white shadow-brutal-sm' : 'bg-gray-100 text-gray-500 hover:bg-gray-200 shadow-none border-b-4'}`}>Login</button>
-              <button onClick={() => {setAuthTab('register'); setError('')}} className={`flex-1 py-3 rounded-xl border-4 border-brand-dark font-black transition-all ${authTab==='register' ? 'bg-brand-secondary text-white shadow-brutal-sm' : 'bg-gray-100 text-gray-500 hover:bg-gray-200 shadow-none'}`}>Nuevo</button>
-              <button onClick={() => {setAuthTab('guest'); setError('')}} className={`flex-1 py-3 rounded-xl border-4 border-brand-dark font-black transition-all ${authTab==='guest' ? 'bg-brand-accent text-brand-dark shadow-brutal-sm' : 'bg-gray-100 text-gray-500 hover:bg-gray-200 shadow-none'}`}>Invitado</button>
+            <div className="flex bg-gray-100/50 p-1.5 rounded-2xl border-4 border-brand-dark mb-8 relative gap-1">
+              {[
+                { id: 'login', label: 'Login', color: 'text-brand-primary' },
+                { id: 'register', label: 'Nuevo', color: 'text-brand-secondary' },
+                { id: 'guest', label: 'Invitado', color: 'text-brand-accent' }
+              ].map((tab) => (
+                <button 
+                  key={tab.id}
+                  onClick={() => {setAuthTab(tab.id); setError('')}} 
+                  className={`flex-1 py-2.5 rounded-xl font-black transition-colors relative`}
+                >
+                  {authTab === tab.id && (
+                    <motion.div 
+                      layoutId="activeTab"
+                      className="absolute inset-0 bg-white border-2 border-brand-dark shadow-brutal-sm rounded-lg"
+                      transition={{ type: "spring", stiffness: 500, damping: 30 }}
+                    />
+                  )}
+                  <span className={`relative z-10 transition-colors duration-300 ${authTab === tab.id ? tab.color : 'text-brand-dark/40'}`}>
+                    {tab.label}
+                  </span>
+                </button>
+              ))}
             </div>
 
             {error && <p className="text-white bg-red-500 border-4 border-brand-dark font-bold text-center mb-6 p-3 rounded-xl shadow-brutal-sm transform -rotate-1">{error}</p>}
@@ -230,7 +350,9 @@ function App() {
                 </div>
               )}
 
-              <button 
+              <motion.button 
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
                 type="submit"
                 onClick={(e) => handleAuth(e, authTab)}
                 className={`w-full text-xl ${btnClass} mt-4
@@ -238,7 +360,7 @@ function App() {
               >
                 {authTab === 'login' ? <LogIn size={24} /> : authTab === 'register' ? <UserPlus size={24} /> : <UserCircle size={24} />}
                 {authTab === 'login' ? 'Iniciar Sesión' : authTab === 'register' ? 'Crear Cuenta' : 'Entrar Rápido'}
-              </button>
+              </motion.button>
             </form>
           </div>
         </PageTransition>
@@ -249,21 +371,41 @@ function App() {
   // --- VISTA 1: Lobby Principal ---
   if (gameState === 'lobby') {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center p-4">
+      <div className={`min-h-screen flex flex-col items-center justify-center p-4 relative ${rawBgColorClass}`}>
+        <ThemeToggle />
         <PageTransition className="w-full max-w-md">
-          
-          <div className="flex justify-between items-center mb-8">
-            <h1 className="text-3xl font-black text-brand-dark transform -rotate-2 bg-white border-4 border-brand-dark px-3 py-1 rounded-xl shadow-brutal-sm">
+          <Logo />
+          <div className="flex justify-between items-center mb-8 mt-2">
+            <h1 className="text-3xl font-black text-brand-dark transform -rotate-2 bg-white border-4 border-brand-dark px-3 py-1 rounded-xl shadow-brutal-sm cursor-default">
               E<span className="text-brand-primary">.</span>M
             </h1>
             <div className="bg-white border-4 border-brand-dark px-4 py-2 rounded-2xl font-bold text-brand-dark shadow-brutal-sm flex items-center gap-3">
                <span className="w-3 h-3 rounded-full bg-brand-success border-2 border-brand-dark"></span>
-               {currentUser.username} {currentUser.isGuest && <span className="text-sm text-brand-secondary bg-gray-100 px-2 rounded-lg border-2 border-brand-dark">Inv</span>}
+               {currentUser.username} {currentUser.isGuest && <span className="text-sm text-brand-secondary bg-gray-100 px-2 rounded-lg border-2 border-brand-dark ml-2">Guest</span>}
+               <button onClick={handleLogout} className="ml-2 p-1 hover:bg-red-100 rounded-lg text-red-500 transition-colors" title="Cerrar sesión">
+                 <UserX size={18} />
+               </button>
             </div>
           </div>
 
+          {currentUser.stats && (
+            <div className="grid grid-cols-3 gap-4 mb-8">
+              <div className="bg-white border-4 border-brand-dark p-3 rounded-2xl shadow-brutal-sm text-center">
+                <p className="text-[10px] uppercase font-black text-gray-400">Partidas</p>
+                <p className="text-xl font-black text-brand-dark">{currentUser.stats.gamesPlayed || 0}</p>
+              </div>
+              <div className="bg-white border-4 border-brand-dark p-3 rounded-2xl shadow-brutal-sm text-center">
+                <p className="text-[10px] uppercase font-black text-gray-400">Victorias</p>
+                <p className="text-xl font-black text-brand-primary">{currentUser.stats.gamesWon || 0}</p>
+              </div>
+              <div className="bg-white border-4 border-brand-dark p-3 rounded-2xl shadow-brutal-sm text-center">
+                <p className="text-[10px] uppercase font-black text-gray-400">Récord</p>
+                <p className="text-xl font-black text-brand-secondary">{currentUser.stats.fastestConvergence || '--'}s</p>
+              </div>
+            </div>
+          )}
+
           <div className="bg-white p-8 rounded-[2rem] border-4 border-brand-dark shadow-brutal space-y-8 relative overflow-hidden">
-            <div className="absolute -right-10 -top-10 w-40 h-40 bg-brand-accent/20 rounded-full blur-xl"></div>
             
             {error && <p className="text-white bg-red-500 border-4 border-brand-dark font-bold text-center p-3 rounded-xl shadow-brutal-sm transform rotate-1">{error}</p>}
             
@@ -306,34 +448,47 @@ function App() {
   // --- VISTA 2: Sala de Espera ---
   if (gameState === 'waiting') {
     return (
-      <div className="min-h-screen p-4 sm:p-8 flex flex-col">
+      <div className={`min-h-screen p-4 sm:p-8 flex flex-col relative ${rawBgColorClass}`}>
+        <ThemeToggle />
         <PageTransition className="max-w-5xl w-full mx-auto flex-1 flex flex-col">
           
-          <header className="flex flex-col sm:flex-row justify-between items-center mb-8 gap-6 bg-white p-6 rounded-3xl border-4 border-brand-dark shadow-brutal">
+          <header className="flex flex-col sm:flex-row justify-between items-center mb-8 gap-4 sm:gap-6 bg-white p-4 sm:p-6 rounded-3xl border-4 border-brand-dark shadow-brutal">
             <button onClick={handleLeaveRoom} className={`bg-white text-brand-dark px-4 py-2 ${btnClass} text-sm`}>
               <ArrowLeft size={20} strokeWidth={3} /> Salir
             </button>
             <div className="text-center transform rotate-1">
               <p className="text-sm font-black uppercase mb-1 bg-brand-secondary text-white px-3 rounded-xl border-2 border-brand-dark inline-block shadow-brutal-sm">Pasa este código</p>
-              <div className="text-5xl font-mono font-black tracking-widest text-brand-dark">
-                {currentRoom}
+              <div className="flex items-center gap-2 justify-center">
+                <div className="text-4xl sm:text-5xl font-mono font-black tracking-widest text-brand-dark">
+                  {currentRoom}
+                </div>
+                <motion.button 
+                  whileHover={{ scale: 1.1 }}
+                  whileTap={{ scale: 0.9 }}
+                  onClick={handleCopyCode}
+                  className="p-2 bg-gray-100 border-2 border-brand-dark rounded-xl hover:bg-brand-accent/30 transition-colors"
+                  title="Copiar código"
+                >
+                  {copied ? <CheckCircle2 size={20} className="text-brand-success" strokeWidth={3} /> : <Clipboard size={20} className="text-brand-dark" strokeWidth={3} />}
+                </motion.button>
               </div>
+              {copied && <span className="text-xs font-bold text-brand-success">¡Copiado!</span>}
             </div>
             <div className="w-[110px] hidden sm:block"></div>
           </header>
 
           <div className="flex-1 flex flex-col">
             <div className="flex justify-between items-end mb-6 px-2">
-              <h3 className="text-3xl font-black text-brand-dark">Jugadores <span className="text-gray-400">({players.length}/8)</span></h3>
+              <h3 className="text-2xl sm:text-3xl font-black text-brand-dark">Jugadores <span className="text-gray-400">({players.length}/8)</span></h3>
             </div>
             
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-6 mb-auto">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4 sm:gap-6 mb-auto">
               <AnimatePresence>
                 {players.map((p) => (
                   <motion.div 
                     initial={{ opacity: 0, scale: 0.5, rotate: -5 }} animate={{ opacity: 1, scale: 1, rotate: 0 }} exit={{ opacity: 0, scale: 0.5 }}
                     key={p.id} 
-                    className={`bg-white border-4 border-brand-dark p-6 rounded-3xl shadow-brutal flex flex-col items-center relative group ${p.id === socket.id ? 'bg-brand-accent/20' : ''}`}
+                    className={`bg-white border-4 border-brand-dark p-4 sm:p-6 rounded-3xl shadow-brutal flex flex-col items-center relative group ${p.id === socket.id ? 'bg-brand-accent/20' : ''}`}
                   >
                     {p.isHost && (
                       <div className="absolute -top-4 bg-brand-accent text-brand-dark border-4 border-brand-dark text-xs font-black uppercase px-4 py-1 rounded-full shadow-brutal-sm transform -rotate-6">
@@ -345,35 +500,35 @@ function App() {
                         <UserX size={20} strokeWidth={3} />
                       </button>
                     )}
-                    <div className="w-24 h-24 bg-white border-4 border-brand-dark rounded-full flex items-center justify-center text-4xl font-black mb-4 shadow-brutal-sm text-brand-primary">
+                    <div className="w-16 h-16 sm:w-24 sm:h-24 bg-white border-4 border-brand-dark rounded-full flex items-center justify-center text-2xl sm:text-4xl font-black mb-2 sm:mb-4 shadow-brutal-sm text-brand-primary">
                       {p.username.charAt(0).toUpperCase()}
                     </div>
-                    <p className="font-black text-xl text-brand-dark truncate w-full text-center">{p.username}</p>
+                    <p className="font-black text-lg sm:text-xl text-brand-dark truncate w-full text-center">{p.username}</p>
                     {p.id === socket.id && <p className="text-sm font-bold text-brand-secondary mt-1">Eres tú</p>}
                   </motion.div>
                 ))}
               </AnimatePresence>
               
-              {[...Array(8 - players.length)].map((_, i) => (
-                <div key={`e-${i}`} className="bg-transparent border-4 border-brand-dark border-dashed p-6 rounded-3xl flex flex-col items-center justify-center opacity-40">
-                  <div className="w-24 h-24 rounded-full flex items-center justify-center text-4xl font-black mb-4 bg-gray-200 border-4 border-gray-400 text-gray-400">?</div>
+              {[...Array(Math.max(0, 8 - players.length))].map((_, i) => (
+                <div key={`e-${i}`} className="bg-transparent border-4 border-brand-dark border-dashed p-4 sm:p-6 rounded-3xl flex flex-col items-center justify-center opacity-40">
+                  <div className="w-16 h-16 sm:w-24 sm:h-24 rounded-full flex items-center justify-center text-2xl sm:text-4xl font-black mb-2 sm:mb-4 bg-gray-200 border-4 border-gray-400 text-gray-400">?</div>
                   <p className="font-black text-gray-400">Libre</p>
                 </div>
               ))}
             </div>
 
-            <div className="mt-12 flex justify-center pb-8">
+            <div className="mt-8 sm:mt-12 flex justify-center pb-8">
               {amIHost ? (
                 <button 
                   onClick={handleStartGame}
                   disabled={players.length < 2}
-                  className={`px-12 py-6 text-3xl ${btnClass} ${players.length >= 2 ? 'bg-brand-success text-white hover:bg-emerald-400' : 'bg-gray-200 text-gray-400 border-gray-400 shadow-none hover:translate-y-0 cursor-not-allowed'}`}
+                  className={`px-8 sm:px-12 py-4 sm:py-6 text-2xl sm:text-3xl ${btnClass} ${players.length >= 2 ? 'bg-brand-success text-white hover:bg-emerald-400' : 'bg-gray-200 text-gray-400 border-gray-400 shadow-none hover:translate-y-0 cursor-not-allowed'}`}
                 >
                   <Play fill="currentColor" size={32} />
                   {players.length >= 2 ? '¡EMPEZAR!' : 'Falta gente...'}
                 </button>
               ) : (
-                <div className="bg-white border-4 border-brand-dark shadow-brutal px-8 py-5 rounded-3xl flex items-center gap-4 text-brand-dark font-black text-xl">
+                <div className="bg-white border-4 border-brand-dark shadow-brutal px-6 sm:px-8 py-4 sm:py-5 rounded-3xl flex items-center gap-4 text-brand-dark font-black text-lg sm:text-xl">
                   <RefreshCw className="animate-spin text-brand-primary" size={28} /> Esperando al líder...
                 </div>
               )}
@@ -390,68 +545,163 @@ function App() {
     const isWriting = gameState === 'writing';
     const amIReady = players.find(p => p.id === socket.id)?.isReady;
 
+    // Calcular el porcentaje restante para la barra del timer
+    const timerPercent = (writeTimeLeft / 30) * 100;
+    const timerColor = writeTimeLeft > 10 ? 'bg-brand-success' : writeTimeLeft > 5 ? 'bg-brand-accent' : 'bg-red-500';
+
     return (
-      <div className="min-h-screen p-4 flex flex-col relative overflow-hidden">
+      <div className={`min-h-screen p-4 flex flex-col relative overflow-hidden ${rawBgColorClass}`}>
+        <ThemeToggle />
         <AnimatePresence>
           {gameState === 'countdown' && (
             <motion.div 
-              initial={{ scale: 0, rotate: -45 }} animate={{ scale: 1, rotate: 0 }} exit={{ scale: 2, opacity: 0 }}
-              transition={{ type: "spring", bounce: 0.6 }}
-              className="absolute inset-0 flex items-center justify-center pointer-events-none z-0"
+              key={countdown}
+              initial={{ scale: 0.2, rotate: -30, opacity: 0 }} 
+              animate={{ scale: [0.5, 1.5, 1], rotate: [-20, 15, -5, 0], opacity: 1 }} 
+              exit={{ scale: 3, opacity: 0, filter: "blur(10px)" }}
+              transition={{ type: "spring", stiffness: 300, damping: 12 }}
+              className="absolute inset-0 flex items-center justify-center pointer-events-none z-20"
             >
-              <span className="text-[50vw] font-black text-brand-secondary drop-shadow-[15px_15px_0px_rgba(15,23,42,1)]" style={{WebkitTextStroke: '10px #0F172A'}}>{countdown > 0 ? countdown : '¡YA!'}</span>
+              <span className="text-[40vw] sm:text-[50vw] font-black text-brand-secondary drop-shadow-[15px_15px_0px_rgba(15,23,42,1)]" style={{WebkitTextStroke: '10px #0F172A'}}>{countdown > 0 ? countdown : '¡YA!'}</span>
             </motion.div>
           )}
         </AnimatePresence>
 
         <div className="max-w-5xl w-full mx-auto flex flex-col h-full relative z-10 flex-1">
-          <header className="flex justify-between items-center bg-white border-4 border-brand-dark shadow-brutal p-4 rounded-3xl mb-8">
-             <div className="px-4 py-2 bg-brand-accent rounded-xl border-4 border-brand-dark font-mono font-black text-brand-dark">
-               SALA: {currentRoom}
+          {/* Header con ronda, timer y código de sala */}
+          <header className="flex flex-col sm:flex-row justify-between items-center bg-white border-4 border-brand-dark shadow-brutal p-4 rounded-3xl mb-4 gap-3">
+             <div className="flex items-center gap-3">
+               <div className="px-4 py-2 bg-brand-accent rounded-xl border-4 border-brand-dark font-mono font-black text-brand-dark text-sm">
+                 SALA: {currentRoom}
+               </div>
+               <motion.button 
+                 whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}
+                 onClick={handleCopyCode}
+                 className="p-2 bg-gray-100 border-2 border-brand-dark rounded-lg"
+                 title="Copiar código"
+               >
+                 {copied ? <CheckCircle2 size={16} className="text-brand-success" /> : <Clipboard size={16} className="text-brand-dark" />}
+               </motion.button>
              </div>
-             <div className="font-black text-2xl uppercase tracking-wider text-brand-dark hidden sm:block transform -rotate-1 bg-gray-100 px-6 py-2 rounded-xl border-4 border-brand-dark shadow-brutal-sm">
-               {isWriting ? '🤔 Escribe tu palabra' : isReveal ? '✨ ¡Revelación!' : '⏳ Preparados...'}
+             
+             {/* Indicador de Ronda */}
+             <div className="font-black text-lg sm:text-2xl uppercase tracking-wider text-brand-dark bg-gray-100 px-4 sm:px-6 py-2 rounded-xl border-4 border-brand-dark shadow-brutal-sm flex items-center gap-2">
+               <Clock size={20} strokeWidth={3} />
+               Ronda {currentRound}
              </div>
-             <button onClick={handleLeaveRoom} className={`bg-red-500 text-white px-4 py-2 text-sm ${btnClass}`}>
-               Huir
-             </button>
+
+             <div className="flex items-center gap-3">
+               <div className="font-black text-xl sm:text-2xl text-brand-dark hidden sm:block">
+                 {isWriting ? '🤔 Escribe' : isReveal ? '✨ Revelación' : '⏳ Preparados'}
+               </div>
+               <button onClick={handleLeaveRoom} className={`bg-red-500 text-white px-4 py-2 text-sm ${btnClass}`}>
+                 Huir
+               </button>
+             </div>
           </header>
 
-          <div className="flex-1 overflow-y-auto mb-8 pr-4 custom-scrollbar">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {players.map(p => {
+          {/* Barra de tiempo visual - solo visible durante la escritura */}
+          {isWriting && (
+            <motion.div 
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="mb-4"
+            >
+              <div className="bg-white border-4 border-brand-dark rounded-2xl p-3 shadow-brutal-sm">
+                <div className="flex justify-between items-center mb-2">
+                  <span className="font-black text-sm text-brand-dark flex items-center gap-1">
+                    <Clock size={14} strokeWidth={3} /> Tiempo
+                  </span>
+                  <span className={`font-mono font-black text-2xl ${writeTimeLeft <= 5 ? 'text-red-500 animate-pulse' : writeTimeLeft <= 10 ? 'text-brand-accent' : 'text-brand-dark'}`}>
+                    {writeTimeLeft}s
+                  </span>
+                </div>
+                <div className="w-full h-5 bg-gray-200 rounded-full border-4 border-brand-dark overflow-hidden">
+                  <motion.div 
+                    className={`h-full rounded-full ${timerColor}`}
+                    initial={{ width: '100%' }}
+                    animate={{ width: `${timerPercent}%` }}
+                    transition={{ duration: 0.5, ease: "linear" }}
+                  />
+                </div>
+              </div>
+            </motion.div>
+          )}
+
+          {/* Aviso de "casi acierto" */}
+          <AnimatePresence>
+            {isReveal && closeMatch && (
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.8, y: -20 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, y: -20 }}
+                className="mb-4 bg-brand-accent border-4 border-brand-dark rounded-2xl p-4 shadow-brutal-sm flex items-center justify-center gap-3"
+              >
+                <Flame size={28} className="text-red-500" strokeWidth={3} />
+                <span className="font-black text-xl text-brand-dark">🔥 ¡Estuvisteis MUY cerca! ¡Seguid así!</span>
+                <Flame size={28} className="text-red-500" strokeWidth={3} />
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          <div className="flex-1 overflow-y-auto mb-4 pr-2 sm:pr-4 custom-scrollbar">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
+              {players.map((p, index) => {
                 const showWord = isReveal;
                 return (
-                  <motion.div layout key={p.id} className={`p-6 rounded-3xl border-4 border-brand-dark shadow-brutal flex items-center gap-6 bg-white ${p.id === socket.id ? 'ring-4 ring-brand-primary ring-offset-4 ring-offset-brand-bg' : ''}`}>
+                  <motion.div 
+                    layout 
+                    key={p.id} 
+                    initial={{ opacity: 0, y: 70, scale: 0.7, rotate: Math.random() * 10 - 5 }} 
+                    animate={{ opacity: 1, y: 0, scale: 1, rotate: 0 }} 
+                    transition={{ type: "spring", stiffness: 250, damping: 20, delay: index * 0.1 }}
+                    className={`p-4 sm:p-6 rounded-3xl border-4 border-brand-dark shadow-brutal flex items-center gap-4 sm:gap-6 bg-white ${p.id === socket.id ? 'ring-4 ring-brand-primary ring-offset-4 ring-offset-brand-bg' : ''}`}
+                  >
                     <div className="relative">
-                      <div className="w-20 h-20 bg-white border-4 border-brand-dark shadow-brutal-sm rounded-2xl flex items-center justify-center text-4xl font-black text-brand-dark">
+                      <div className="w-14 h-14 sm:w-20 sm:h-20 bg-white border-4 border-brand-dark shadow-brutal-sm rounded-2xl flex items-center justify-center text-2xl sm:text-4xl font-black text-brand-dark">
                         {p.username.charAt(0).toUpperCase()}
                       </div>
                       {p.isReady && !isReveal && (
-                        <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} className="absolute -bottom-3 -right-3 bg-brand-success text-white border-4 border-brand-dark rounded-full p-2 shadow-brutal-sm">
-                          <CheckCircle2 size={24} strokeWidth={3} />
+                        <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} className="absolute -bottom-3 -right-3 bg-brand-success text-white border-4 border-brand-dark rounded-full p-1 sm:p-2 shadow-brutal-sm">
+                          <CheckCircle2 size={18} strokeWidth={3} />
                         </motion.div>
                       )}
                     </div>
                     
-                    <div className="flex-1">
-                      <p className="text-lg font-black text-brand-dark mb-2">{p.username} {p.id === socket.id && <span className="text-brand-primary">(Tú)</span>}</p>
-                      <div className="bg-gray-100 border-4 border-brand-dark shadow-brutal-sm min-h-[70px] rounded-2xl flex items-center px-5 py-3">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-base sm:text-lg font-black text-brand-dark mb-2">{p.username} {p.id === socket.id && <span className="text-brand-primary">(Tú)</span>}</p>
+                      <div className="bg-gray-100 border-4 border-brand-dark shadow-brutal-sm min-h-[50px] sm:min-h-[70px] rounded-2xl flex items-center px-3 sm:px-5 py-2 sm:py-3">
                         {showWord ? (
-                           <motion.span initial={{ opacity: 0, scale: 0.5, rotate: 5 }} animate={{ opacity: 1, scale: 1, rotate: 0 }} className="text-3xl font-black text-brand-primary uppercase w-full text-center">
+                           <motion.div 
+                             initial={{ scale: 0, rotate: -25, y: 30 }} 
+                             animate={{ scale: [0.5, 1.2, 1], rotate: [-15, 10, -5, 0], y: 0 }} 
+                             transition={{ type: "spring", stiffness: 350, damping: 10, delay: index * 0.2 + 0.3 }}
+                             className="text-2xl sm:text-4xl font-black text-brand-primary uppercase w-full text-center origin-center"
+                             style={{ WebkitTextStroke: '1px #0F172A' }}
+                           >
                              {p.currentWord}
-                           </motion.span>
+                           </motion.div>
                         ) : p.isReady ? (
-                           <span className="text-brand-success font-black text-xl flex items-center gap-2">¡LISTO! <CheckCircle2 strokeWidth={3}/></span>
+                           <motion.span 
+                             initial={{ scale: 0, rotate: 90 }} 
+                             animate={{ scale: [1.5, 1], rotate: 0 }} 
+                             transition={{ type: "spring", stiffness: 400, damping: 10 }}
+                             className="text-brand-success font-black text-lg sm:text-xl flex items-center gap-2"
+                           >
+                             ¡LISTO! <CheckCircle2 strokeWidth={3}/>
+                           </motion.span>
                         ) : (
                            <div className="flex w-full justify-center"><div className="dot-flashing"></div></div>
                         )}
                       </div>
                       
+                      {/* Historial de rondas previas (lateral, sutil) */}
                       {p.previousWords && p.previousWords.length > 0 && (
-                        <div className="mt-3 flex gap-2 flex-wrap">
+                        <div className="mt-2 flex gap-1.5 flex-wrap">
                           {p.previousWords.map((pw, i) => (
-                            <span key={i} className="text-xs font-bold bg-gray-200 text-gray-500 border-2 border-gray-400 px-2 py-1 rounded-lg line-through">{pw}</span>
+                            <span key={i} className="text-[10px] sm:text-xs font-bold bg-gray-200 text-gray-500 border-2 border-gray-300 px-2 py-0.5 rounded-lg" title={`Ronda ${i + 1}`}>
+                              R{i + 1}: {pw}
+                            </span>
                           ))}
                         </div>
                       )}
@@ -462,23 +712,23 @@ function App() {
             </div>
           </div>
 
-          <div className={`p-6 bg-white border-4 border-brand-dark shadow-brutal rounded-3xl transition-opacity ${!isWriting ? 'opacity-50 pointer-events-none' : ''}`}>
-            <form onSubmit={handleSubmitWord} className="flex gap-4">
+          <div className={`p-4 sm:p-6 bg-white border-4 border-brand-dark shadow-brutal rounded-3xl transition-opacity ${!isWriting ? 'opacity-50 pointer-events-none' : ''}`}>
+            <form onSubmit={handleSubmitWord} className="flex gap-3 sm:gap-4">
               <input 
                 type="text" 
                 value={myWordInput}
                 onChange={(e) => setMyWordInput(e.target.value)}
                 disabled={amIReady || !isWriting}
                 placeholder={amIReady ? "Esperando al resto..." : "Escribe tu idea secreta..."}
-                className={inputClass + " text-2xl py-6"}
+                className={inputClass + " text-xl sm:text-2xl py-4 sm:py-6"}
                 autoFocus autoComplete="off"
               />
               <button 
                 type="submit"
                 disabled={!myWordInput.trim() || amIReady || !isWriting}
-                className={`px-10 ${btnClass} ${!myWordInput.trim() || amIReady || !isWriting ? 'bg-gray-200 text-gray-400 border-gray-400 shadow-none' : 'bg-brand-secondary text-white'}`}
+                className={`px-6 sm:px-10 ${btnClass} ${!myWordInput.trim() || amIReady || !isWriting ? 'bg-gray-200 text-gray-400 border-gray-400 shadow-none' : 'bg-brand-secondary text-white'}`}
               >
-                <Send size={36} strokeWidth={3} />
+                <Send size={28} strokeWidth={3} />
               </button>
             </form>
           </div>
@@ -490,35 +740,38 @@ function App() {
   // --- VISTA 4: Victoria ---
   if (gameState === 'finished') {
     return (
-      <div className="min-h-screen flex items-center justify-center p-4">
+      <div className={`min-h-screen flex items-center justify-center p-4 relative ${rawBgColorClass}`}>
+        <ThemeToggle />
         <PageTransition className="w-full max-w-3xl text-center">
           <motion.div 
             initial={{ scale: 0, rotate: -180 }} animate={{ scale: 1, rotate: 0 }} transition={{ type: "spring", bounce: 0.5, duration: 1 }}
             className="inline-flex justify-center mb-8 bg-brand-accent border-4 border-brand-dark p-8 rounded-full shadow-brutal"
           >
-            <Trophy size={100} className="text-brand-dark" strokeWidth={2.5} />
+            <Trophy size={80} className="text-brand-dark sm:w-[100px] sm:h-[100px]" strokeWidth={2.5} />
           </motion.div>
           
-          <h1 className="text-7xl font-black text-brand-dark mb-8 transform -rotate-2" style={{WebkitTextStroke: '2px white'}}>¡ENLACE MENTAL!</h1>
+          <h1 className="text-5xl sm:text-7xl font-black text-brand-dark mb-4 transform -rotate-2" style={{WebkitTextStroke: '2px white'}}>¡ENLACE MENTAL!</h1>
+          
+          <p className="text-lg font-black text-brand-dark/60 mb-6">Conseguido en {totalRounds} {totalRounds === 1 ? 'ronda' : 'rondas'}</p>
           
           <motion.div 
              initial={{ y: 50, scale: 0.8 }} animate={{ y: 0, scale: 1 }} transition={{ delay: 0.5, type: "spring" }}
-             className="bg-brand-success text-white border-4 border-brand-dark text-8xl font-black px-16 py-10 rounded-[3rem] shadow-brutal mb-16 uppercase tracking-widest inline-block transform rotate-1"
+             className="bg-brand-success text-white border-4 border-brand-dark text-5xl sm:text-8xl font-black px-10 sm:px-16 py-8 sm:py-10 rounded-[3rem] shadow-brutal mb-12 sm:mb-16 uppercase tracking-widest inline-block transform rotate-1"
           >
             {winningWord}
           </motion.div>
 
-          <div className="flex flex-col sm:flex-row justify-center gap-6">
+          <div className="flex flex-col sm:flex-row justify-center gap-4 sm:gap-6">
             <button 
               onClick={handleLeaveRoom}
-              className={`px-10 py-6 bg-white text-brand-dark text-xl ${btnClass}`}
+              className={`px-8 sm:px-10 py-4 sm:py-6 bg-white text-brand-dark text-lg sm:text-xl ${btnClass}`}
             >
               Volver al Lobby
             </button>
             {amIHost && (
               <button 
                 onClick={handleResetGame}
-                className={`px-10 py-6 bg-brand-primary text-white text-2xl ${btnClass}`}
+                className={`px-8 sm:px-10 py-4 sm:py-6 bg-brand-primary text-white text-xl sm:text-2xl ${btnClass}`}
               >
                 <RefreshCw size={28} strokeWidth={3} />
                 Otra Partida

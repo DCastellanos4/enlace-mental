@@ -1,11 +1,44 @@
 @import "tailwindcss";
 
+:root {
+  --c-bg: #FFFBF0;
+  --c-surface: #FFFFFF;
+  --c-text-main: #0F172A;
+  --c-gray-100: #F3F4F6;
+  --shadow-base: rgba(15, 23, 42, 1);
+}
+
+.dark {
+  --c-bg: #1C1917;         /* Fondo carbón cálido */
+  --c-surface: #292524;    /* Cartas y menús en piedra oscura cálida */
+  --c-text-main: #FAFAF9;  /* Texto y bordes en blanco cálido para contraste */
+  --c-gray-100: #3A3633;   /* Inputs y elementos secundarios */
+  --shadow-base: rgba(0, 0, 0, 1); /* Sombras negras sólidas */
+}
+
+@theme {
+  --color-brand-bg: var(--c-bg);
+  --color-white: var(--c-surface);
+  --color-brand-dark: var(--c-text-main);
+  --color-gray-100: var(--c-gray-100);
+  
+  --color-brand-primary: #8B5CF6;
+  --color-brand-secondary: #EC4899;
+  --color-brand-accent: #FBBF24;
+  --color-brand-success: #10B981;
+  --shadow-brutal: 6px 6px 0px 0px var(--shadow-base);
+  --shadow-brutal-sm: 4px 4px 0px 0px var(--shadow-base);
+  --shadow-brutal-hover: 2px 2px 0px 0px var(--shadow-base);
+}
+
 body {
   margin: 0;
   font-family: 'Poppins', sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background-color: #FFFBF0;
+  background-color: var(--c-bg);
+  color: var(--c-text-main);
+  transition: background-color 0.3s, color 0.3s;
 }
 
 /* Animación para los 3 puntitos */
