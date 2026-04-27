@@ -1,0 +1,50 @@
+
+> backend@1.0.0 dev
+> nodemon src/server.js
+
+[33m[nodemon] 3.1.14[39m
+[33m[nodemon] to restart at any time, enter `rs`[39m
+[33m[nodemon] watching path(s): *.*[39m
+[33m[nodemon] watching extensions: js,mjs,cjs,json[39m
+[32m[nodemon] starting `node src/server.js`[39m
+🚀 Servidor backend escuchando en http://localhost:3001
+🔌 Nuevo cliente conectado: Ac1XV_VUIcwqgyiHAAAB
+🏠 Sala GL8X1 creada por Jules
+❌ Cliente desconectado: Ac1XV_VUIcwqgyiHAAAB
+[32m[nodemon] restarting due to changes...[39m
+[32m[nodemon] starting `node src/server.js`[39m
+🚀 Servidor backend escuchando en http://localhost:3001
+[32m[nodemon] restarting due to changes...[39m
+[32m[nodemon] restarting due to changes...[39m
+[32m[nodemon] starting `node src/server.js`[39m
+🚀 Servidor backend escuchando en http://localhost:3001
+[32m[nodemon] restarting due to changes...[39m
+[32m[nodemon] restarting due to changes...[39m
+[32m[nodemon] starting `node src/server.js`[39m
+🚀 Servidor backend escuchando en http://localhost:3001
+[32m[nodemon] restarting due to changes...[39m
+[32m[nodemon] restarting due to changes...[39m
+[32m[nodemon] starting `node src/server.js`[39m
+🚀 Servidor backend escuchando en http://localhost:3001
+[32m[nodemon] restarting due to changes...[39m
+[32m[nodemon] restarting due to changes...[39m
+[32m[nodemon] restarting due to changes...[39m
+[32m[nodemon] starting `node src/server.js`[39m
+🚀 Servidor backend escuchando en http://localhost:3001
+✅ Conectado a la base de datos SQLite.
+[32m[nodemon] restarting due to changes...[39m
+[32m[nodemon] starting `node src/server.js`[39m
+🚀 Servidor backend escuchando en http://localhost:3001
+✅ Conectado a la base de datos SQLite.
+👤 HostGuest_Invitado abandonó la sala FSHPO
+👤 PlayerTwo_Invitado abandonó la sala FSHPO
+👤 HostGuest_Invitado abandonó la sala 118TZ
+👤 PlayerTwo_Invitado abandonó la sala 118TZ
+👤 HostGuest_Invitado abandonó la sala K18IG
+👤 HostGuest_Invitado abandonó la sala KSEUL
+👤 HostGuest_Invitado abandonó la sala QQLW7
+👤 PlayerTwo_Invitado abandonó la sala QQLW7
+👤 HostGuest_Invitado abandonó la sala BM4LW
+👤 PlayerTwo_Invitado abandonó la sala BM4LW
+👤 HostGuest_Invitado abandonó la sala NRU9N
+👤 PlayerTwo_Invitado abandonó la sala NRU9N
