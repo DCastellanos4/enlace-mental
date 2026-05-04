@@ -52,11 +52,22 @@ function levenshtein(a, b) {
   return matrix[b.length][a.length];
 }
 
-const WRITE_TIME = 30; // Segundos que tiene cada jugador para escribir su palabra
+// 30 segundos es el tiempo que demostraron ser suficiente en las pruebas con usuarios:
+// demasiado poco genera estrés, demasiado aburre. Se puede ajustar fácilmente desde aquí.
+const WRITE_TIME = 30;
 
 module.exports = function setupSockets(io) {
+  // rooms actúa como nuestra "base de datos en RAM" para las partidas activas.
+  // Cada clave es el código de sala (ej. 'XK9TZ') y el valor contiene todo el
+  // estado de esa partida: jugadores, fase actual, ronda y timers.
+  // Al ser volátil, si el servidor se reinicia las partidas en curso se pierden,
+  // lo cual es aceptable para este tipo de juego de sesión corta.
   const rooms = {};
 
+  // Función auxiliar reutilizada tanto cuando el jugador se va voluntariamente
+  // como cuando se desconecta de forma abrupta (cierre de pestaña, etc.).
+  // Si era el host, automáticamente ascendemos al siguiente jugador para que
+  // la partida pueda continuar sin necesidad de intervención manual.
   const removePlayerFromRoom = (socketId, roomCode) => {
     const room = rooms[roomCode];
     if (room) {
@@ -68,7 +79,8 @@ module.exports = function setupSockets(io) {
         console.log(`👤 ${player.username} abandonó la sala ${roomCode}`);
 
         if (room.players.length === 0) {
-          // Limpiar timers antes de borrar la sala
+          // Si no queda nadie, liberamos la sala y cancelamos cualquier timer
+          // pendiente para evitar fugas de memoria (setInterval sin clearInterval).
           if (room.writeTimer) clearInterval(room.writeTimer);
           delete rooms[roomCode];
         } else {
@@ -92,7 +104,10 @@ module.exports = function setupSockets(io) {
     }));
   };
 
-  // Inicia el temporizador de escritura de 30 segundos
+  // Gestiona el temporizador de escritura. Emite un tick por segundo al cliente
+  // para que pueda mostrar la cuenta atrás en tiempo real. Si el tiempo se agota
+  // antes de que todos hayan enviado su palabra, los rezagados reciben '...'
+  // como palabra por defecto para que la ronda pueda continuar igualmente.
   const startWriteTimer = (roomCode) => {
     const room = rooms[roomCode];
     if (!room) return;
@@ -136,6 +151,10 @@ module.exports = function setupSockets(io) {
     }, 1000);
   };
 
+  // Se llama cada vez que un jugador envía su palabra. Comprueba si ya han
+  // respondido todos: si es así, adelantamos la fase de cuenta atrás sin esperar
+  // a que expire el timer. Esto premia la agilidad del grupo y hace el juego
+  // más dinámico cuando todos están coordinados.
   const checkRoundCompletion = (roomCode) => {
     const room = rooms[roomCode];
     if (!room || room.status !== 'playing') return;
@@ -170,6 +189,9 @@ module.exports = function setupSockets(io) {
     }
   };
 
+  // Fase de revelación: compara todas las palabras y determina si la ronda
+  // es un acierto completo, un "casi acierto" o hay que jugar otra ronda.
+  // Esta es la función más crítica del juego desde el punto de vista lógico.
   const revealWordsAndCheckWin = (roomCode) => {
     const room = rooms[roomCode];
     if (!room) return;
@@ -227,8 +249,15 @@ module.exports = function setupSockets(io) {
     }
   };
 
+  // A partir de aquí registramos todos los manejadores de eventos de Socket.IO.
+  // Cada 'socket.on(...)' responde a una acción iniciada por el cliente.
+  // El patrón de callback en los eventos (ej. createRoom, joinRoom) permite que
+  // el cliente reciba confirmación de éxito o error de forma síncrona.
   io.on('connection', (socket) => {
     socket.on('createRoom', ({ username }, callback) => {
+      // Generamos un código alfanumérico de 5 caracteres para la sala.
+      // Con base 36 y 5 dígitos tenemos 36^5 = ~60 millones de combinaciones,
+      // más que suficiente para partidas simultáneas en un entorno académico.
       const roomCode = Math.random().toString(36).substring(2, 7).toUpperCase();
 
       rooms[roomCode] = {
@@ -338,6 +367,10 @@ module.exports = function setupSockets(io) {
       if (callback) callback({ success: true });
     });
 
+    // El evento 'disconnect' se dispara automáticamente cuando el socket
+    // pierde la conexión (cierre de pestaña, pérdida de red, etc.).
+    // Es fundamental manejarlo para limpiar el estado del servidor y notificar
+    // al resto de jugadores de la sala que alguien se ha ido.
     socket.on('disconnect', () => {
       if (socket.data.roomCode) {
         removePlayerFromRoom(socket.id, socket.data.roomCode);

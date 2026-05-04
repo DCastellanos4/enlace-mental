@@ -1,3 +1,16 @@
+/**
+ * Logo.jsx — Componente del logotipo animado de Enlace Mental
+ *
+ * El logo no es una imagen estática: usa Framer Motion para animar su
+ * aparición con un efecto de muelle y para girar los fondos luminosos
+ * en bucle. Esto da vida a la pantalla de bienvenida y refuerza la
+ * identidad visual del proyecto.
+ *
+ * Los blobs de color difuminado (blur) son un recurso estético moderno
+ * que aporta profundidad sin sobrecargar la página. Se implementan como
+ * divs con clases de Tailwind (bg-brand-primary/20 + blur).
+ */
+
 import React from 'react';
 import { motion } from 'framer-motion';
 import logoApp from '../assets/logoApp.png';

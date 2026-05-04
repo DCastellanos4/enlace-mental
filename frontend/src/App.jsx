@@ -1,3 +1,24 @@
+/**
+ * App.jsx — Componente raíz de la aplicación Enlace Mental
+ *
+ * Toda la UI de la aplicación vive en este único componente (SPA: Single Page
+ * Application). En lugar de tener varias páginas con sus propias rutas, usamos
+ * un estado interno (gameState) para decidir qué "pantalla" renderizar.
+ *
+ * Esto tiene una ventaja clara en este tipo de juego: el socket se mantiene
+ * activo durante toda la sesión del usuario sin necesidad de reconectarse al
+ * cambiar de vista, lo que elimina latencia y posibles pérdidas de mensajes.
+ *
+ * Estados posibles de gameState:
+ *   'auth'     → Pantalla de login/registro
+ *   'lobby'    → Menú principal para crear o unirse a una sala
+ *   'waiting'  → Sala de espera antes de empezar la partida
+ *   'writing'  → Fase activa de escritura de la palabra
+ *   'countdown'→ Cuenta atrás de 3 segundos antes de revelar
+ *   'reveal'   → Revelación de las palabras de todos los jugadores
+ *   'finished' → Pantalla de victoria
+ */
+
 import { useState, useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
 import { Users, UserPlus, ArrowLeft, Play, Send, RefreshCw, Trophy, LogIn, CheckCircle2, UserX, UserCircle, Sun, Moon, Clipboard, Clock, Flame } from 'lucide-react';
@@ -7,9 +28,18 @@ import { initAudio, playPop, playTick, playWin } from './utils/sfx';
 import { Logo } from './components/Logo';
 import logoApp from './assets/logoApp.png';
 
+// La URL del backend se lee desde las variables de entorno de Vite.
+// En local apunta a localhost, en producción se configura en el .env del contenedor.
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
+
+// Creamos la conexión Socket.IO a nivel de módulo (fuera del componente)
+// para que sea un único socket compartido durante toda la vida de la app,
+// en lugar de crear uno nuevo con cada renderización del componente.
 const socket = io(BACKEND_URL);
 
+// Componente de animación de entrada/salida para las transiciones entre pantallas.
+// Usamos Framer Motion con un efecto de muelle (spring) para que los cambios de
+// vista no sean abruptos y den sensación de fluidez y pulido en la UI.
 const PageTransition = ({ children, className }) => (
   <motion.div 
     initial={{ opacity: 0, y: 30, scale: 0.95 }} 
@@ -23,18 +53,22 @@ const PageTransition = ({ children, className }) => (
 );
 
 function App() {
-  const [token, setToken] = useState(null);
-  const [currentUser, setCurrentUser] = useState(null);
+  // --- Estado de autenticación ---
+  const [token, setToken] = useState(null);          // JWT recibido del backend
+  const [currentUser, setCurrentUser] = useState(null); // Datos del usuario activo
 
+  // --- Estado del formulario de auth ---
   const [authTab, setAuthTab] = useState('login'); 
   const [authUsername, setAuthUsername] = useState('');
   const [authPassword, setAuthPassword] = useState('');
 
-  const [roomCode, setRoomCode] = useState('');
-  const [currentRoom, setCurrentRoom] = useState(null);
+  // --- Estado de la sala y la partida ---
+  const [roomCode, setRoomCode] = useState('');       // Código que el usuario introduce para unirse
+  const [currentRoom, setCurrentRoom] = useState(null); // Código de la sala en la que estamos
   const [players, setPlayers] = useState([]);
   const [error, setError] = useState('');
   
+  // Controla qué pantalla se muestra (ver lista de estados en el JSDoc del archivo)
   const [gameState, setGameState] = useState('auth'); 
   const [myWordInput, setMyWordInput] = useState('');
   const [winningWord, setWinningWord] = useState('');
@@ -46,10 +80,15 @@ function App() {
   const [copied, setCopied] = useState(false);
   const [totalRounds, setTotalRounds] = useState(1);
   
+  // Tema oscuro/claro: persistimos la preferencia en localStorage para que
+  // el usuario no tenga que volver a elegirlo cada vez que abre la app.
   const [isDarkMode, setIsDarkMode] = useState(() => {
     return localStorage.getItem('em_theme') === 'dark';
   });
 
+  // Aplicamos o quitamos la clase 'dark' en el elemento raíz del HTML.
+  // Tailwind CSS usa esta clase para activar todos los estilos dark:* definidos
+  // en los componentes. Es el enfoque estándar recomendado por la documentación.
   useEffect(() => {
     if (isDarkMode) {
       document.documentElement.classList.add('dark');
@@ -60,9 +99,13 @@ function App() {
     }
   }, [isDarkMode]);
 
-  // Hook principal de ciclo de vida para sincronizar los eventos del socket
+  // Hook principal de ciclo de vida: se ejecuta una sola vez al montar el componente.
+  // Aquí centralizamos dos responsabilidades clave:
+  //   1. Recuperar la sesión guardada para no obligar al usuario a hacer login tras F5.
+  //   2. Registrar todos los listeners de Socket.IO para reaccionar a los eventos del servidor.
   useEffect(() => {
-    // 1. Persistencia de sesión: Evita que el usuario tenga que hacer login de nuevo si pulsa F5
+    // 1. Persistencia de sesión: si hay token guardado, lo restauramos y saltamos al lobby.
+    //    El token JWT contiene la info del usuario, así que no hace falta una petición extra.
     const savedToken = localStorage.getItem('em_token');
     const savedUser = localStorage.getItem('em_user');
     
@@ -73,7 +116,8 @@ function App() {
     }
     setLoading(false);
     
-    // 2. Suscripción a eventos del servidor
+    // 2. Listeners de Socket.IO: cada uno actualiza el estado de React
+    //    cuando llega un evento del servidor, provocando un re-render automático.
     socket.on('roomUpdated', (updatedPlayers) => setPlayers(updatedPlayers));
 
     socket.on('gameStarted', (data) => {
@@ -107,8 +151,9 @@ function App() {
       setTotalRounds(rounds || 1);
       setGameState('finished');
       playWin();
-      // Lanzamos confetti varias veces para asegurar que el efecto es espectacular
-      const fire = () => confetti({ 
+    // Lanzamos confetti varias veces para asegurar que el efecto sea espectacular.
+      // Canvas Confetti es una librería ligera que usa un canvas 2D superpuesto.
+      const fire = () => confetti({
         particleCount: 150, 
         spread: 100, 
         origin: { y: 0.6 },
@@ -133,7 +178,9 @@ function App() {
       setError('Has sido expulsado de la sala.');
     });
 
-    // IMPORTANTE: Cleanup function del useEffect para evitar fugas de memoria y duplicidad de listeners si el componente se desmonta
+    // IMPORTANTE: Cleanup function de useEffect — se ejecuta cuando el componente
+    // se desmonta. Eliminamos todos los listeners para evitar fugas de memoria
+    // y que un mismo evento se procese más de una vez si el componente se vuelve a montar.
     return () => {
       socket.off('roomUpdated');
       socket.off('gameStarted');
@@ -146,9 +193,12 @@ function App() {
     };
   }, []);
 
+  // handleAuth gestiona los tres flujos de entrada: login, registro e invitado.
+  // En lugar de tener tres funciones separadas, el parámetro 'type' selecciona
+  // el endpoint correspondiente, reduciendo la duplicación de código.
   const handleAuth = async (e, type) => {
     e.preventDefault();
-    initAudio();
+    initAudio(); // Los navegadores bloquean el audio hasta que hay una interacción del usuario; lo iniciamos aquí.
     if (!authUsername.trim()) return setError('Introduce un apodo genial');
     if (type !== 'guest' && !authPassword.trim()) return setError('Falta la contraseña');
     
@@ -167,7 +217,8 @@ function App() {
       setToken(data.token);
       setCurrentUser(data.user);
       
-      // Persistir sesión
+      // Persistimos el token y el usuario en localStorage para sobrevivir a recargas de página.
+      // Solo guardamos datos no sensibles: nunca guardamos la contraseña en el cliente.
       localStorage.setItem('em_token', data.token);
       localStorage.setItem('em_user', JSON.stringify(data.user));
 
@@ -260,6 +311,8 @@ function App() {
     });
   };
 
+  // Determinamos si el usuario actual es el host buscando su socket.id en la lista
+  // de jugadores. Esto decide si se muestra el botón de 'EMPEZAR' o el mensaje de espera.
   const amIHost = players.find(p => p.id === socket.id)?.isHost || false;
 
   const btnClass = "font-black py-4 rounded-2xl border-4 border-brand-dark shadow-brutal hover:shadow-brutal-sm hover:translate-y-[2px] transition-all flex justify-center items-center gap-2 active:shadow-none active:translate-y-[6px]";
